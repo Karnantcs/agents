@@ -1,0 +1,32 @@
+name: agentbox
+
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: orchestrator
+    image: agentbox-orchestrator:latest
+    ports:
+      - "8091:8091"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      AGENTBOX_MODE: orchestrator
+      SERVER_PORT: "8091"
+      AGENT_IMAGE: ${AGENT_IMAGE:-agentbox-agent:latest}
+      DOCKER_NETWORK: ${DOCKER_NETWORK:-agentbox_default}
+      ORCHESTRATOR_URL: http://orchestrator:8091
+      LLM_PROVIDER: ${LLM_PROVIDER:-anthropic}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-8192}
+      AGENT_MEM_LIMIT_BYTES: ${AGENT_MEM_LIMIT_BYTES:-536870912}
+      AGENT_NANO_CPUS: ${AGENT_NANO_CPUS:-1000000000}
+      TASK_TIMEOUT: ${TASK_TIMEOUT:-180s}
+      MAX_HOPS: ${MAX_HOPS:-4}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-15}
+    restart: unless-stopped
