@@ -1,0 +1,7 @@
+.git
+.idea
+target
+.env
+agent-tools
+*.md
+!README.md

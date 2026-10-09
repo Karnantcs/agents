@@ -1,0 +1,30 @@
+server:
+  port: ${SERVER_PORT:8091}
+
+agentbox:
+  mode: ${AGENTBOX_MODE:orchestrator}
+  agent-image: ${AGENT_IMAGE:agentbox-agent:latest}
+  docker-network: ${DOCKER_NETWORK:agentbox_default}
+  orchestrator-url: ${ORCHESTRATOR_URL:http://orchestrator:8091}
+  agent-port: ${AGENT_PORT:8092}
+  mem-limit-bytes: ${AGENT_MEM_LIMIT_BYTES:536870912}
+  nano-cpus: ${AGENT_NANO_CPUS:1000000000}
+  ready-timeout: ${AGENT_READY_TIMEOUT:25s}
+  task-timeout: ${TASK_TIMEOUT:180s}
+  max-hops: ${MAX_HOPS:4}
+  max-steps: ${AGENT_MAX_STEPS:8}
+  workspace: ${WORKSPACE:/workspace}
+  agent-name: ${AGENT_NAME:agent}
+  role: ${AGENT_ROLE:You are a helpful agent.}
+  llm:
+    provider: ${LLM_PROVIDER:anthropic}
+    max-tokens: ${LLM_MAX_TOKENS:8192}
+    anthropic-model: ${ANTHROPIC_MODEL:claude-sonnet-5-5}
+    anthropic-api-key: ${ANTHROPIC_API_KEY:}
+    openai-api-key: ${OPENAI_API_KEY:}
+    openai-base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+    openai-model: ${OPENAI_MODEL:gpt-4o-mini}
+
+logging:
+  level:
+    dev.agentbox: INFO

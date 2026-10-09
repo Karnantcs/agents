@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agentbox</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #1c1915;
+      --muted: #5c564c;
+      --paper: #f4f0e6;
+      --card: #fffdf8;
+      --line: #e2d9c8;
+      --accent: #9a3412;
+      --accent-ink: #fff7ed;
+      --ok: #3f6212;
+      --bad: #9f1239;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font: 16px/1.45 "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+      color: var(--ink);
+      background: var(--paper);
+    }
+    header, main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; }
+    header { padding: 28px 0 8px; }
+    h1 { font-size: 1.8rem; margin: 0 0 6px; letter-spacing: -0.03em; }
+    header p, .hint { color: var(--muted); margin: 0; }
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+      padding: 18px 0 40px;
+    }
+    @media (max-width: 800px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    section {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    h2 { font-size: 1rem; margin: 0 0 12px; }
+    label { display: block; font-size: 0.85rem; margin: 10px 0 4px; }
+    input, textarea, button {
+      font: inherit;
+      color: inherit;
+    }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
+    textarea { min-height: 96px; resize: vertical; }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 8px 12px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      cursor: pointer;
+    }
+    button.secondary { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .row { display: flex; gap: 8px; margin-top: 12px; }
+    .agent {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      margin-top: 8px;
+      padding: 8px;
+    }
+    .agent button.select {
+      flex: 1;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+      padding: 0;
+    }
+    .agent.selected { border-color: var(--accent); }
+    .status { color: var(--ok); font-size: 0.8rem; }
+    .status.exited, .status.dead { color: var(--bad); }
+    .banner {
+      background: #fff1f2;
+      color: var(--bad);
+      border: 1px solid #fecdd3;
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 12px;
+    }
+    .transcript { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+    .bubble { border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; }
+    .bubble.you { background: #fff7ed; }
+    .bubble.agent { background: #f5f5f4; }
+    .who { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; }
+    details { margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+    pre { white-space: pre-wrap; margin: 6px 0 0; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Agentbox</h1>
+    <p>One container per agent. Start a lead and a worker, then send the lead a task it can hand off.</p>
+  </header>
+  <main class="layout">
+    <section>
+      <h2>Agents</h2>
+      <div id="banner" class="banner" hidden></div>
+      <form id="create-form">
+        <label for="name">Name</label>
+        <input id="name" name="name" required pattern="[a-z][a-z0-9-]{0,31}" placeholder="worker" autocomplete="off">
+        <label for="role">Role</label>
+        <textarea id="role" name="role" required placeholder="You do hands-on work in your workspace. Use the shell and files. Do not delegate."></textarea>
+        <div class="row">
+          <button type="submit">Start agent</button>
+          <button type="button" class="secondary" id="refresh">Refresh</button>
+        </div>
+      </form>
+      <div id="agents" style="margin-top: 14px"></div>
+    </section>
+    <section>
+      <h2 id="chat-title">Task</h2>
+      <p class="hint">Each message is a new task. The agent does not keep earlier turns.</p>
+      <div id="transcript" class="transcript"></div>
+      <form id="chat-form">
+        <label for="task">Message</label>
+        <textarea id="task" required placeholder="Ask worker to write hello.txt containing exactly hello from worker, then read it back."></textarea>
+        <div class="row">
+          <button type="submit" id="send">Send</button>
+        </div>
+      </form>
+    </section>
+  </main>
+  <script>
+    const banner = document.getElementById("banner");
+    const agentsEl = document.getElementById("agents");
+    const transcript = document.getElementById("transcript");
+    const chatTitle = document.getElementById("chat-title");
+    const send = document.getElementById("send");
+    let agents = [];
+    let selected = "";
+
+    function showError(error) {
+      banner.hidden = false;
+      banner.textContent = error.message || String(error);
+    }
+
+    function clearError() {
+      banner.hidden = true;
+      banner.textContent = "";
+    }
+
+    async function api(path, options) {
+      const response = await fetch(path, options);
+      const text = await response.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+      if (!response.ok) {
+        const detail = data && (data.detail || data.message) || response.statusText;
+        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      }
+      return data;
+    }
+
+    function renderAgents() {
+      agentsEl.replaceChildren();
+      if (!agents.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "No agents yet. Start one with a short name and a role.";
+        agentsEl.append(empty);
+        return;
+      }
+      for (const agent of agents) {
+        const row = document.createElement("div");
+        row.className = "agent" + (agent.name === selected ? " selected" : "");
+        const selectButton = document.createElement("button");
+        selectButton.type = "button";
+        selectButton.className = "select";
+        const title = document.createElement("strong");
+        title.textContent = agent.name;
+        const role = document.createElement("div");
+        role.className = "hint";
+        role.textContent = agent.role || "No role recorded";
+        selectButton.append(title, role);
+        selectButton.addEventListener("click", () => select(agent.name));
+        const side = document.createElement("span");
+        const status = document.createElement("div");
+        status.className = "status " + (agent.status || "");
+        status.textContent = agent.status || "unknown";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => removeAgent(agent.name));
+        side.append(status, remove);
+        row.append(selectButton, side);
+        agentsEl.append(row);
+      }
+    }
+
+    function select(name) {
+      selected = name;
+      chatTitle.textContent = name ? "Task for " + name : "Task";
+      renderAgents();
+    }
+
+    function addBubble(who, text, trace) {
+      const bubble = document.createElement("div");
+      bubble.className = "bubble " + (who === "You" ? "you" : "agent");
+      const label = document.createElement("div");
+      label.className = "who";
+      label.textContent = who;
+      const body = document.createElement("div");
+      body.textContent = text;
+      bubble.append(label, body);
+      if (trace && trace.length) {
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = trace.length + (trace.length === 1 ? " tool call" : " tool calls");
+        const pre = document.createElement("pre");
+        pre.textContent = trace.map((step) => step.tool + " " + JSON.stringify(step.input) + "\n" + step.output).join("\n\n");
+        details.append(summary, pre);
+        bubble.append(details);
+      }
+      transcript.append(bubble);
+      bubble.scrollIntoView({ block: "nearest" });
+    }
+
+    async function refresh() {
+      try {
+        agents = await api("/agents");
+        clearError();
+        if (selected && !agents.some((agent) => agent.name === selected)) {
+          selected = "";
+          chatTitle.textContent = "Task";
+        }
+        renderAgents();
+      } catch (error) {
+        agents = [];
+        renderAgents();
+        showError(error);
+      }
+    }
+
+    async function removeAgent(name) {
+      try {
+        await api("/agents/" + encodeURIComponent(name), { method: "DELETE" });
+        clearError();
+        await refresh();
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    document.getElementById("create-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const name = document.getElementById("name").value.trim();
+      const role = document.getElementById("role").value.trim();
+      try {
+        await api("/agents", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name, role })
+        });
+        clearError();
+        document.getElementById("name").value = "";
+        select(name);
+        await refresh();
+      } catch (error) {
+        showError(error);
+      }
+    });
+
+    document.getElementById("refresh").addEventListener("click", refresh);
+
+    document.getElementById("chat-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!selected) {
+        showError(new Error("Select an agent first."));
+        return;
+      }
+      const task = document.getElementById("task").value.trim();
+      if (!task) return;
+      addBubble("You", task);
+      document.getElementById("task").value = "";
+      send.disabled = true;
+      send.textContent = "Working…";
+      try {
+        const result = await api("/agents/" + encodeURIComponent(selected) + "/message", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message: task })
+        });
+        clearError();
+        addBubble(selected, result.reply || "(empty reply)", result.trace || []);
+      } catch (error) {
+        showError(error);
+        addBubble(selected, error.message);
+      } finally {
+        send.disabled = false;
+        send.textContent = "Send";
+      }
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
