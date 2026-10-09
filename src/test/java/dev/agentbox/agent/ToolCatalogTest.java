@@ -67,10 +67,11 @@ class ToolCatalogTest {
         JsonNode body = mapper.readTree(seenBody.get());
         assertThat(body.get("message").asText()).isEqualTo("write the file");
         assertThat(body.get("hops").asInt()).isEqualTo(2);
+        assertThat(body.get("from").asText()).isEqualTo("lead");
     }
 
     private ToolCatalog catalog(Path workspace, HttpTransport http) {
         return new ToolCatalog(
-                workspace, "http://orchestrator:8091", 1, Duration.ofSeconds(5), Duration.ofMillis(200), http, mapper);
+                workspace, "http://orchestrator:8091", "lead", 1, Duration.ofSeconds(5), Duration.ofMillis(200), http, mapper);
     }
 }

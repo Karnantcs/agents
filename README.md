@@ -11,7 +11,7 @@ Java 21 and Spring Boot 3 serve both processes from one jar: the orchestrator, a
 - Build an agent image whose process receives a task over HTTP, calls the model with four tools (`run_shell`, `read_file`, `write_file`, `message_agent`), and loops until the model answers or it hits a step limit.
 - Start, list, message, and remove agents through the orchestrator. Each agent is a container on the Compose network, with its own workspace at `/workspace`.
 - Let one agent delegate by calling `message_agent` with another agent's name. The call goes back through the orchestrator, which forwards it to that container.
-- Create agents, list them, and chat from the page at `/`, or with `curl`.
+- Create agents, list them, and chat from the page at `/`, or with `curl`. The page keeps an in-memory activity log: who messaged whom, whether it is still running, and the reply. Open one agent at `/#/agents/{name}`.
 
 Each task is independent. The agent does not remember earlier messages.
 
@@ -55,13 +55,13 @@ Start two agents:
 - Name `worker`, role `You do hands-on work in your workspace. Use the shell and files. Do not delegate.`
 - Name `lead`, role `You are the lead. Delegate hands-on file and shell work to the agent named worker, then summarize the worker reply.`
 
-Select `lead` and send:
+Click `lead` to open `/#/agents/lead`, or select it on the main page, and send:
 
 ```text
 Ask worker to write hello.txt containing exactly hello from worker, then tell me what the worker replied.
 ```
 
-The lead should call `message_agent`. The worker writes the file in its own container and the lead summarizes the reply. The page shows the tool trace under the answer.
+The lead should call `message_agent`. The worker writes the file in its own container and the lead summarizes the reply. The Activity panel shows `user -> lead` and `lead -> worker`. The lead's page lists that task and the delegation, with a link to the worker. The worker's page shows the request it received and the `write_file` tool call.
 
 The same steps with curl:
 
@@ -79,11 +79,22 @@ curl -s -X POST http://127.0.0.1:8091/agents/lead/message \
   -d '{"message":"Ask worker to write hello.txt containing exactly hello from worker, then tell me what the worker replied."}'
 
 curl -s http://127.0.0.1:8091/agents
+curl -s http://127.0.0.1:8091/activity
+curl -s http://127.0.0.1:8091/agents/lead/activity
 curl -s -X DELETE http://127.0.0.1:8091/agents/lead
 curl -s -X DELETE http://127.0.0.1:8091/agents/worker
 ```
 
 `docker logs agentbox-lead` shows tool calls. `docker ps --filter label=agentbox.managed=true` lists agent containers.
+
+To pick up a new build while Compose is already running, rebuild the agent image and recreate the orchestrator, then start the agents again so they send their name on `message_agent`:
+
+```bash
+docker build -f Dockerfile --target agent -t agentbox-agent:latest .
+docker compose up --build --force-recreate
+```
+
+Create replaces an exited container of the same name. Remove an agent that is still running before starting it again.
 
 ## Tests
 
@@ -99,12 +110,18 @@ mvn test
 | --- | --- | --- | --- |
 | `GET` | `/` | | HTML page |
 | `GET` | `/health` | | `{"status":"ok"}` |
-| `GET` | `/agents` | | array of `{name, role, status, container}` |
+| `GET` | `/agents` | | array of `{name, role, status, container, availability, currentTask, currentFrom}` |
 | `POST` | `/agents` | `{"name","role"}` | `201` and the new agent |
-| `POST` | `/agents/{name}/message` | `{"message","hops?"}` | `{reply, steps, trace}` |
+| `POST` | `/agents/{name}/message` | `{"message","hops?","from?","parent?"}` | `{reply, steps, trace}` |
+| `GET` | `/activity` | optional `?agent=` | newest activity entries, up to 500 |
+| `GET` | `/agents/{name}/activity` | | that agent's messages, delegations, and tool calls, newest first |
 | `DELETE` | `/agents/{name}` | | `204` |
 
-Names are 1–32 characters: a lowercase letter, then lowercase letters, digits, or hyphens. `hops` limits delegation chains (default 4). The original request uses `0`. Each `message_agent` call sends `hops + 1`.
+Names are 1–32 characters: a lowercase letter, then lowercase letters, digits, or hyphens. `hops` limits delegation chains (default 4). The original request uses `0`. Each `message_agent` call sends `hops + 1` and `from` set to that agent's name.
+
+`from` defaults to `user`. `parent`, when omitted, is the sender's in-flight task, so a delegation points at the message that caused it. Each entry is `{id, timestamp, from, to, message, status, reply, durationMillis, parentId, kind}`. `status` is `sent`, `working`, `done`, or `error`. `kind` is `message` or `tool`. `availability` on an agent is `busy` or `idle`. The log is in memory and keeps the newest 500 entries. `message_agent` itself is the delegation entry, not a second tool row.
+
+The main page polls `/activity` and `/agents`. `/#/agents/{name}` is that agent's history and a box to send it another message. The Activity panel stays on both screens. Names in the log link to that hash.
 
 `DELETE /agents/{name}` removes the container when it is already exited. `POST /agents` with the same name replaces that exited container and starts a new one. A running agent with that name is still a conflict.
 

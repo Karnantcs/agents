@@ -108,6 +108,28 @@
     details { margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
     pre { white-space: pre-wrap; margin: 6px 0 0; }
     .empty { color: var(--muted); }
+    .wide { grid-column: 1 / -1; }
+    .badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      border-radius: 999px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+    }
+    .badge.busy { color: var(--accent); border-color: var(--accent); }
+    .badge.idle { color: var(--muted); }
+    .activity-list { max-height: 360px; overflow: auto; }
+    .activity-item { border-top: 1px solid var(--line); padding: 8px 0; }
+    .activity-item:first-child { border-top: 0; }
+    .pill { font-size: 0.8rem; }
+    .pill.working, .pill.sent { color: var(--accent); }
+    .pill.done { color: var(--ok); }
+    .pill.error { color: var(--bad); }
+    a { color: var(--accent); }
+    .agent-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .history-item { border-top: 1px solid var(--line); padding: 10px 0; }
+    .history-item:first-child { border-top: 0; }
+    .child { margin: 6px 0 0 16px; }
   </style>
 </head>
 <body>
@@ -116,9 +138,9 @@
     <p>One container per agent. Start a lead and a worker, then send the lead a task it can hand off.</p>
   </header>
   <main class="layout">
-    <section>
+    <div id="banner" class="banner wide" hidden></div>
+    <section id="home-agents">
       <h2>Agents</h2>
-      <div id="banner" class="banner" hidden></div>
       <form id="create-form">
         <label for="name">Name</label>
         <input id="name" name="name" required pattern="[a-z][a-z0-9-]{0,31}" placeholder="worker" autocomplete="off">
@@ -131,7 +153,7 @@
       </form>
       <div id="agents" style="margin-top: 14px"></div>
     </section>
-    <section>
+    <section id="home-chat">
       <h2 id="chat-title">Task</h2>
       <p class="hint">Each message is a new task. The agent does not keep earlier turns.</p>
       <div id="transcript" class="transcript"></div>
@@ -143,15 +165,41 @@
         </div>
       </form>
     </section>
+    <section id="agent-view" class="wide" hidden>
+      <div class="agent-head">
+        <a href="#/">All agents</a>
+        <h2 id="agent-title">Agent</h2>
+        <span id="agent-badge" class="badge idle">idle</span>
+        <span id="agent-status" class="status"></span>
+      </div>
+      <p id="agent-current" class="hint" hidden></p>
+      <h2>History</h2>
+      <p class="hint">Messages this agent received, tools it used, and agents it delegated to.</p>
+      <div id="agent-history"></div>
+      <form id="agent-chat">
+        <label for="agent-task-input">Message</label>
+        <textarea id="agent-task-input" required placeholder="Send this agent a task."></textarea>
+        <div class="row">
+          <button type="submit" id="agent-send">Send</button>
+        </div>
+      </form>
+    </section>
+    <section class="wide">
+      <h2>Activity</h2>
+      <p class="hint">Who messaged whom. Refreshes every couple of seconds.</p>
+      <div id="activity" class="activity-list"></div>
+    </section>
   </main>
   <script>
     const banner = document.getElementById("banner");
     const agentsEl = document.getElementById("agents");
     const transcript = document.getElementById("transcript");
+    const activityEl = document.getElementById("activity");
     const chatTitle = document.getElementById("chat-title");
     const send = document.getElementById("send");
     let agents = [];
     let selected = "";
+    let viewing = "";
 
     function showError(error) {
       banner.hidden = false;
@@ -196,8 +244,22 @@
         role.className = "hint";
         role.textContent = agent.role || "No role recorded";
         selectButton.append(title, role);
-        selectButton.addEventListener("click", () => select(agent.name));
+        if (agent.availability === "busy" && agent.currentTask) {
+          const task = document.createElement("div");
+          task.className = "hint";
+          const who = agent.currentFrom || "someone";
+          task.textContent = who + ": " + agent.currentTask;
+          task.title = task.textContent;
+          selectButton.append(task);
+        }
+        selectButton.addEventListener("click", () => {
+          select(agent.name);
+          location.hash = "#/agents/" + agent.name;
+        });
         const side = document.createElement("span");
+        const badge = document.createElement("div");
+        badge.className = "badge " + (agent.availability === "busy" ? "busy" : "idle");
+        badge.textContent = agent.availability === "busy" ? "busy" : "idle";
         const status = document.createElement("div");
         status.className = "status " + (agent.status || "");
         status.textContent = agent.status || "unknown";
@@ -206,7 +268,7 @@
         remove.className = "secondary";
         remove.textContent = "Remove";
         remove.addEventListener("click", () => removeAgent(agent.name));
-        side.append(status, remove);
+        side.append(badge, status, remove);
         row.append(selectButton, side);
         agentsEl.append(row);
       }
@@ -279,13 +341,270 @@
         clearError();
         document.getElementById("name").value = "";
         select(name);
+        location.hash = "#/agents/" + name;
         await refresh();
       } catch (error) {
         showError(error);
       }
     });
 
-    document.getElementById("refresh").addEventListener("click", refresh);
+    function agentLink(name) {
+      if (!name || !/^[a-z][a-z0-9-]{0,31}$/.test(name)) return null;
+      const link = document.createElement("a");
+      link.href = "#/agents/" + name;
+      link.textContent = name;
+      return link;
+    }
+
+    function when(value) {
+      if (!value) return "";
+      return String(value).replace("T", " ").replace(/\.\d+Z$/, "Z");
+    }
+
+    function pill(status) {
+      const node = document.createElement("span");
+      node.className = "pill " + (status || "");
+      node.textContent = "[" + (status || "sent") + "]";
+      return node;
+    }
+
+    function toolLine(item) {
+      const row = document.createElement("div");
+      row.className = "child";
+      const line = document.createElement("div");
+      line.textContent = (item.to || "tool") + ": " + (item.message || "") + " ";
+      line.append(pill(item.status));
+      row.append(line);
+      if (item.reply) {
+        const details = document.createElement("details");
+        details.dataset.id = "tool-" + item.id;
+        const summary = document.createElement("summary");
+        summary.textContent = "Output";
+        const pre = document.createElement("pre");
+        pre.textContent = item.reply;
+        details.append(summary, pre);
+        row.append(details);
+      }
+      return row;
+    }
+
+    function delegationLine(item) {
+      const row = document.createElement("div");
+      row.className = "child";
+      const line = document.createElement("div");
+      line.append(document.createTextNode("delegated to "));
+      const link = agentLink(item.to);
+      if (link) line.append(link);
+      else line.append(document.createTextNode(item.to || "?"));
+      const preview = item.message && item.message.length > 160 ? item.message.slice(0, 160) + "…" : (item.message || "");
+      line.append(document.createTextNode(": " + preview + " "));
+      line.append(pill(item.status));
+      row.append(line);
+      if (item.reply) {
+        const reply = document.createElement("div");
+        reply.className = "hint";
+        reply.textContent = item.reply;
+        row.append(reply);
+      }
+      return row;
+    }
+
+    function historyCard(item, kids) {
+      const card = document.createElement("div");
+      card.className = "history-item";
+      const meta = document.createElement("div");
+      meta.className = "who";
+      meta.append(document.createTextNode(when(item.timestamp) + " · from "));
+      const sender = agentLink(item.from);
+      if (sender) meta.append(sender);
+      else meta.append(document.createTextNode(item.from || "user"));
+      meta.append(document.createTextNode(" "));
+      meta.append(pill(item.status));
+      if (item.durationMillis != null) {
+        meta.append(document.createTextNode(" " + item.durationMillis + " ms"));
+      }
+      const body = document.createElement("div");
+      body.textContent = item.message || "";
+      card.append(meta, body);
+      if (item.reply) {
+        const reply = document.createElement("div");
+        reply.className = "bubble agent";
+        reply.textContent = item.reply;
+        card.append(reply);
+      }
+      const tools = kids.filter((kid) => kid.kind === "tool").sort((a, b) => a.id - b.id);
+      const delegations = kids.filter((kid) => kid.kind !== "tool" && kid.from === item.to).sort((a, b) => a.id - b.id);
+      for (const tool of tools) card.append(toolLine(tool));
+      for (const delegation of delegations) card.append(delegationLine(delegation));
+      return card;
+    }
+
+    function renderHistory(name, items) {
+      const history = document.getElementById("agent-history");
+      history.replaceChildren();
+      const inbound = items.filter((item) => item.kind !== "tool" && item.to === name).sort((a, b) => a.id - b.id);
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "No messages yet.";
+        history.append(empty);
+        return;
+      }
+      const children = new Map();
+      for (const item of items) {
+        if (item.parentId == null) continue;
+        if (!children.has(item.parentId)) children.set(item.parentId, []);
+        children.get(item.parentId).push(item);
+      }
+      const shown = new Set();
+      for (const item of inbound) {
+        shown.add(item.id);
+        const kids = (children.get(item.id) || []).filter((kid) => kid.kind === "tool" || kid.from === item.to);
+        for (const kid of kids) shown.add(kid.id);
+        history.append(historyCard(item, kids));
+      }
+      const rest = items.filter((item) => !shown.has(item.id)).sort((a, b) => a.id - b.id);
+      for (const item of rest) {
+        history.append(item.kind === "tool" ? toolLine(item) : delegationLine(item));
+      }
+    }
+
+    function renderAgentHeader(agent) {
+      document.getElementById("agent-title").textContent = viewing;
+      const badge = document.getElementById("agent-badge");
+      const busy = agent && agent.availability === "busy";
+      badge.className = "badge " + (busy ? "busy" : "idle");
+      badge.textContent = agent ? (busy ? "busy" : "idle") : "gone";
+      const status = document.getElementById("agent-status");
+      status.className = "status " + (agent && agent.status ? agent.status : "");
+      status.textContent = agent ? (agent.status || "") : "not running";
+      const current = document.getElementById("agent-current");
+      if (busy && agent.currentTask) {
+        current.hidden = false;
+        current.textContent = (agent.currentFrom || "someone") + ": " + agent.currentTask;
+      } else {
+        current.hidden = true;
+        current.textContent = "";
+      }
+    }
+
+    async function refreshAgent() {
+      if (!viewing) return;
+      renderAgentHeader(agents.find((agent) => agent.name === viewing));
+      try {
+        renderHistory(viewing, await api("/agents/" + encodeURIComponent(viewing) + "/activity"));
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    function applyRoute() {
+      const match = /^#\/agents\/([a-z][a-z0-9-]{0,31})$/.exec(location.hash);
+      viewing = match ? match[1] : "";
+      document.getElementById("home-agents").hidden = Boolean(viewing);
+      document.getElementById("home-chat").hidden = Boolean(viewing);
+      document.getElementById("agent-view").hidden = !viewing;
+      if (viewing) {
+        document.title = viewing + " · Agentbox";
+        if (agents.length) refreshAgent();
+      } else {
+        document.title = "Agentbox";
+      }
+    }
+
+    function renderActivity(items) {
+      const open = new Set();
+      for (const details of activityEl.querySelectorAll("details[open]")) {
+        open.add(details.dataset.id);
+      }
+      activityEl.replaceChildren();
+      if (!items.length) {
+        const empty = document.createElement("p");
+        empty.className = "empty";
+        empty.textContent = "No messages yet.";
+        activityEl.append(empty);
+        return;
+      }
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "activity-item";
+        const line = document.createElement("div");
+        const fromLink = agentLink(item.from);
+        if (fromLink) line.append(fromLink);
+        else line.append(document.createTextNode(item.from || "?"));
+        line.append(document.createTextNode(" -> "));
+        const toLink = agentLink(item.to);
+        if (toLink) line.append(toLink);
+        else line.append(document.createTextNode(item.to || "?"));
+        const preview = item.message && item.message.length > 180 ? item.message.slice(0, 180) + "…" : (item.message || "");
+        line.append(document.createTextNode(": " + preview + " "));
+        line.append(pill(item.status));
+        row.append(line);
+        if (item.parentId) {
+          const link = document.createElement("div");
+          link.className = "hint";
+          link.textContent = "part of #" + item.parentId;
+          row.append(link);
+        }
+        const details = document.createElement("details");
+        details.dataset.id = String(item.id);
+        if (open.has(String(item.id))) {
+          details.open = true;
+        }
+        const summary = document.createElement("summary");
+        summary.textContent = "Reply";
+        const pre = document.createElement("pre");
+        const bits = [];
+        if (item.message) bits.push(item.message);
+        if (item.reply) bits.push(item.reply);
+        if (item.durationMillis != null) bits.push(item.durationMillis + " ms");
+        pre.textContent = bits.join("\n\n");
+        details.append(summary, pre);
+        row.append(details);
+        activityEl.append(row);
+      }
+    }
+
+    async function refreshActivity() {
+      try {
+        renderActivity(await api("/activity"));
+      } catch (error) {
+        showError(error);
+      }
+    }
+
+    document.getElementById("refresh").addEventListener("click", () => {
+      refresh();
+      refreshActivity();
+      refreshAgent();
+    });
+
+    document.getElementById("agent-chat").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!viewing) return;
+      const task = document.getElementById("agent-task-input").value.trim();
+      if (!task) return;
+      document.getElementById("agent-task-input").value = "";
+      const button = document.getElementById("agent-send");
+      button.disabled = true;
+      button.textContent = "Working…";
+      try {
+        await api("/agents/" + encodeURIComponent(viewing) + "/message", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message: task })
+        });
+        clearError();
+        await refresh();
+        await refreshActivity();
+        await refreshAgent();
+      } catch (error) {
+        showError(error);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Send";
+      }
+    });
 
     document.getElementById("chat-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -316,7 +635,17 @@
       }
     });
 
-    refresh();
+    window.addEventListener("hashchange", applyRoute);
+    applyRoute();
+    refresh().then(() => {
+      if (viewing) refreshAgent();
+    });
+    refreshActivity();
+    setInterval(() => {
+      refresh();
+      refreshActivity();
+      refreshAgent();
+    }, 1500);
   </script>
 </body>
 </html>

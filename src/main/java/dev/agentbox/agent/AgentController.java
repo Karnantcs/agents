@@ -53,6 +53,7 @@ public class AgentController {
             ToolCatalog tools = new ToolCatalog(
                     Path.of(properties.workspace()),
                     properties.orchestratorUrl(),
+                    properties.agentName(),
                     hops,
                     properties.taskTimeout(),
                     java.time.Duration.ofSeconds(20),

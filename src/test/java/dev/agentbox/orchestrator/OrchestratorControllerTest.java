@@ -15,28 +15,42 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import dev.agentbox.agent.TaskResult;
 import java.util.List;
+import java.util.Map;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 @WebMvcTest(controllers = OrchestratorController.class, properties = "agentbox.mode=orchestrator")
+@Import(ActivityLog.class)
 class OrchestratorControllerTest {
 
     @Autowired
     private MockMvc mvc;
 
+    @Autowired
+    private ActivityLog activityLog;
+
     @MockitoBean
     private AgentRuntime runtime;
+
+    @BeforeEach
+    void resetActivity() {
+        activityLog.clear();
+    }
 
     @Test
     void homePageOffersCreateAndChat() throws Exception {
         mvc.perform(get("/"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("Agentbox")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("Start agent")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Start agent")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Activity")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("#/agents/")));
     }
 
     @Test
@@ -56,7 +70,8 @@ class OrchestratorControllerTest {
         mvc.perform(get("/agents"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].name").value("worker"))
-                .andExpect(jsonPath("$[0].status").value("running"));
+                .andExpect(jsonPath("$[0].status").value("running"))
+                .andExpect(jsonPath("$[0].availability").value("idle"));
 
         mvc.perform(post("/agents/worker/message")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -66,6 +81,51 @@ class OrchestratorControllerTest {
 
         mvc.perform(delete("/agents/worker")).andExpect(status().isNoContent());
         verify(runtime).remove("worker");
+
+        mvc.perform(get("/activity"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].from").value("user"))
+                .andExpect(jsonPath("$[0].to").value("worker"))
+                .andExpect(jsonPath("$[0].message").value("say hi"))
+                .andExpect(jsonPath("$[0].status").value("done"))
+                .andExpect(jsonPath("$[0].reply").value("hello"))
+                .andExpect(jsonPath("$[0].durationMillis").isNumber());
+
+        mvc.perform(get("/activity").param("agent", "other"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void agentActivityListsTheTaskAndItsToolCalls() throws Exception {
+        when(runtime.message(eq("worker"), eq("write it"), eq(0))).thenReturn(new TaskResult(
+                "wrote it",
+                2,
+                List.of(
+                        new TaskResult.TraceStep("write_file", Map.of("path", "hello.txt"), "wrote hello.txt"),
+                        new TaskResult.TraceStep("message_agent", Map.of("name", "lead"), "ok"))));
+
+        mvc.perform(post("/agents/worker/message")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"message\":\"write it\"}"))
+                .andExpect(status().isOk());
+
+        mvc.perform(get("/agents/worker/activity"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].kind").value("tool"))
+                .andExpect(jsonPath("$[0].from").value("worker"))
+                .andExpect(jsonPath("$[0].to").value("write_file"))
+                .andExpect(jsonPath("$[0].message").value(org.hamcrest.Matchers.containsString("hello.txt")))
+                .andExpect(jsonPath("$[0].reply").value("wrote hello.txt"))
+                .andExpect(jsonPath("$[0].parentId").value(1))
+                .andExpect(jsonPath("$[1].kind").value("message"))
+                .andExpect(jsonPath("$[1].from").value("user"))
+                .andExpect(jsonPath("$[1].to").value("worker"))
+                .andExpect(jsonPath("$[1].status").value("done"))
+                .andExpect(jsonPath("$[1].reply").value("wrote it"));
+
+        mvc.perform(get("/agents/NOPE/activity")).andExpect(status().isBadRequest());
     }
 
     @Test

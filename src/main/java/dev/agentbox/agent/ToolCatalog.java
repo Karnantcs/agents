@@ -55,6 +55,7 @@ public final class ToolCatalog {
 
     private final Path workspace;
     private final String orchestratorUrl;
+    private final String sender;
     private final int hops;
     private final Duration taskTimeout;
     private final Duration shellTimeout;
@@ -64,6 +65,7 @@ public final class ToolCatalog {
     public ToolCatalog(
             Path workspace,
             String orchestratorUrl,
+            String sender,
             int hops,
             Duration taskTimeout,
             Duration shellTimeout,
@@ -71,6 +73,7 @@ public final class ToolCatalog {
             ObjectMapper mapper) {
         this.workspace = workspace;
         this.orchestratorUrl = orchestratorUrl;
+        this.sender = sender == null || sender.isBlank() ? "agent" : sender;
         this.hops = hops;
         this.taskTimeout = taskTimeout;
         this.shellTimeout = shellTimeout;
@@ -181,7 +184,10 @@ public final class ToolCatalog {
             return "error: orchestrator URL is not configured";
         }
         String url = trimSlash(orchestratorUrl) + "/agents/" + name + "/message";
-        String payload = mapper.writeValueAsString(Map.of("message", message, "hops", hops + 1));
+        String payload = mapper.writeValueAsString(Map.of(
+                "message", message,
+                "hops", hops + 1,
+                "from", sender));
         HttpTransport.Result result = http.exchange("POST", URI.create(url), payload, taskTimeout);
         if (result.status() >= 400) {
             return "error: orchestrator returned " + result.status() + ": " + clip(result.body());

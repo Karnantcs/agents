@@ -74,6 +74,7 @@ class AgentLoopTest {
         return new ToolCatalog(
                 workspace,
                 "http://orchestrator:8091",
+                "lead",
                 0,
                 Duration.ofSeconds(5),
                 Duration.ofSeconds(20),
@@ -87,6 +88,7 @@ class AgentLoopTest {
         return new ToolCatalog(
                 Path.of("unused"),
                 "http://orchestrator:8091",
+                "lead",
                 0,
                 Duration.ofSeconds(1),
                 Duration.ofSeconds(20),
