@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_SELF;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -102,9 +103,38 @@ class DockerAgentRuntimeTest {
         CreateContainerCmd create = mock(CreateContainerCmd.class, RETURNS_SELF);
         when(create.exec()).thenThrow(new ConflictException("name in use"));
         when(docker.createContainerCmd(anyString())).thenReturn(create);
+        stubInspect(docker, "agentbox-lead", "lead", "running", "role");
         DockerAgentRuntime runtime = new DockerAgentRuntime(
                 docker, TestAgents.properties("anthropic", "k"), (m, u, b, t) -> new HttpTransport.Result(200, ""), mapper);
         assertThatThrownBy(() -> runtime.create("lead", "role")).isInstanceOf(AgentErrors.Exists.class);
+        verify(docker, never()).removeContainerCmd(anyString());
+    }
+
+    @Test
+    void createReplacesAnExitedContainerWithTheSameName() {
+        DockerClient docker = mock(DockerClient.class);
+        CreateContainerCmd create = mock(CreateContainerCmd.class, RETURNS_SELF);
+        CreateContainerResponse response = new CreateContainerResponse();
+        response.setId("cid-new");
+        when(create.exec()).thenThrow(new ConflictException("name in use")).thenReturn(response);
+        when(docker.createContainerCmd(anyString())).thenReturn(create);
+        stubInspect(docker, "agentbox-lead", "lead", "exited", "old role");
+        RemoveContainerCmd remove = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        when(docker.removeContainerCmd("cid")).thenReturn(remove);
+        StartContainerCmd start = mock(StartContainerCmd.class);
+        when(docker.startContainerCmd("cid-new")).thenReturn(start);
+        HttpTransport http = (method, uri, body, timeout) -> new HttpTransport.Result(200, "{\"status\":\"ok\"}");
+
+        DockerAgentRuntime runtime = new DockerAgentRuntime(docker, TestAgents.properties("anthropic", "k"), http, mapper);
+        AgentRecord created = runtime.create("lead", "new role");
+
+        assertThat(created.name()).isEqualTo("lead");
+        assertThat(created.role()).isEqualTo("new role");
+        assertThat(created.status()).isEqualTo("running");
+        verify(remove).withForce(true);
+        verify(remove).exec();
+        verify(docker, never()).stopContainerCmd(anyString());
+        verify(start).exec();
     }
 
     @Test
@@ -138,6 +168,56 @@ class DockerAgentRuntimeTest {
         assertThat(result.reply()).isEqualTo("filed");
         assertThat(result.steps()).isEqualTo(3);
         assertThat(result.trace()).singleElement().satisfies(step -> assertThat(step.tool()).isEqualTo("write_file"));
+    }
+
+    @Test
+    void removeDeletesAnExitedContainerWithoutStoppingIt() {
+        DockerClient docker = mock(DockerClient.class);
+        stubInspect(docker, "agentbox-lead", "lead", "exited", "role");
+        RemoveContainerCmd remove = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        when(docker.removeContainerCmd("cid")).thenReturn(remove);
+        DockerAgentRuntime runtime = new DockerAgentRuntime(
+                docker, TestAgents.properties("anthropic", "k"), (m, u, b, t) -> new HttpTransport.Result(200, ""), mapper);
+
+        runtime.remove("lead");
+
+        verify(remove).withForce(true);
+        verify(remove).exec();
+        verify(docker, never()).stopContainerCmd(anyString());
+    }
+
+    @Test
+    void removeStopsARunningContainerThenDeletesIt() {
+        DockerClient docker = mock(DockerClient.class);
+        stubInspect(docker, "agentbox-lead", "lead", "running", "role");
+        StopContainerCmd stop = mock(StopContainerCmd.class, RETURNS_SELF);
+        RemoveContainerCmd remove = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        when(docker.stopContainerCmd("cid")).thenReturn(stop);
+        when(docker.removeContainerCmd("cid")).thenReturn(remove);
+        DockerAgentRuntime runtime = new DockerAgentRuntime(
+                docker, TestAgents.properties("anthropic", "k"), (m, u, b, t) -> new HttpTransport.Result(200, ""), mapper);
+
+        runtime.remove("lead");
+
+        verify(stop).withTimeout(5);
+        verify(stop).exec();
+        verify(remove).withForce(true);
+        verify(remove).exec();
+    }
+
+    @Test
+    void removeReportsWhenAnExitedContainerCannotBeDeleted() {
+        DockerClient docker = mock(DockerClient.class);
+        stubInspect(docker, "agentbox-lead", "lead", "exited", "role");
+        RemoveContainerCmd remove = mock(RemoveContainerCmd.class, RETURNS_SELF);
+        when(remove.exec()).thenThrow(new ConflictException("busy"));
+        when(docker.removeContainerCmd("cid")).thenReturn(remove);
+        DockerAgentRuntime runtime = new DockerAgentRuntime(
+                docker, TestAgents.properties("anthropic", "k"), (m, u, b, t) -> new HttpTransport.Result(200, ""), mapper);
+
+        assertThatThrownBy(() -> runtime.remove("lead"))
+                .isInstanceOf(AgentErrors.StartFailed.class)
+                .hasMessageContaining("remove failed");
     }
 
     @Test

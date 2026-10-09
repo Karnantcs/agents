@@ -51,24 +51,7 @@ public final class DockerAgentRuntime implements AgentRuntime {
                 .withMemory(properties.memLimitBytes())
                 .withMemorySwap(properties.memLimitBytes())
                 .withNanoCPUs(properties.nanoCpus());
-        CreateContainerResponse created;
-        try {
-            created = docker.createContainerCmd(properties.agentImage())
-                    .withName(container)
-                    .withEnv(environment(name, role))
-                    .withLabels(Map.of("agentbox.managed", "true", "agentbox.name", name))
-                    .withWorkingDir("/workspace")
-                    .withHostConfig(host)
-                    .exec();
-        } catch (ConflictException exception) {
-            throw new AgentErrors.Exists("agent " + name + " already exists");
-        } catch (NotFoundException exception) {
-            throw new AgentErrors.StartFailed("Agent image " + properties.agentImage()
-                    + " was not found. Build it first: docker build -f Dockerfile --target agent -t "
-                    + properties.agentImage() + " .");
-        } catch (RuntimeException exception) {
-            throw failure("create", exception);
-        }
+        CreateContainerResponse created = createContainer(name, role, container, host);
 
         try {
             docker.startContainerCmd(created.getId()).exec();
@@ -156,8 +139,55 @@ public final class DockerAgentRuntime implements AgentRuntime {
     public void remove(String name) {
         Names.check(name);
         InspectContainerResponse inspected = inspect(Names.container(name), name);
-        removeQuietly(inspected.getId());
+        // Stop on an already exited container returns 304 and can fail the following remove.
+        if (needsStop(statusOf(inspected))) {
+            stopQuietly(inspected.getId());
+        }
+        deleteContainer(inspected.getId(), true);
         log.info("removed agent {}", name);
+    }
+
+    private CreateContainerResponse createContainer(String name, String role, String container, HostConfig host) {
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                return docker.createContainerCmd(properties.agentImage())
+                        .withName(container)
+                        .withEnv(environment(name, role))
+                        .withLabels(Map.of("agentbox.managed", "true", "agentbox.name", name))
+                        .withWorkingDir("/workspace")
+                        .withHostConfig(host)
+                        .exec();
+            } catch (ConflictException exception) {
+                if (attempt == 1 || !replaceExited(container, name)) {
+                    throw new AgentErrors.Exists("agent " + name + " already exists");
+                }
+            } catch (NotFoundException exception) {
+                throw new AgentErrors.StartFailed("Agent image " + properties.agentImage()
+                        + " was not found. Build it first: docker build -f Dockerfile --target agent -t "
+                        + properties.agentImage() + " .");
+            } catch (RuntimeException exception) {
+                throw failure("create", exception);
+            }
+        }
+        throw new AgentErrors.Exists("agent " + name + " already exists");
+    }
+
+    /** Removes a same-named exited container so create can start a fresh one. */
+    private boolean replaceExited(String container, String name) {
+        InspectContainerResponse existing;
+        try {
+            existing = docker.inspectContainerCmd(container).exec();
+        } catch (NotFoundException exception) {
+            return false;
+        } catch (RuntimeException exception) {
+            throw failure("inspect", exception);
+        }
+        if (!"exited".equalsIgnoreCase(statusOf(existing))) {
+            return false;
+        }
+        log.info("replacing exited agent {}", name);
+        deleteContainer(existing.getId(), true);
+        return true;
     }
 
     private InspectContainerResponse inspect(String idOrName, String agentName) {
@@ -197,17 +227,43 @@ public final class DockerAgentRuntime implements AgentRuntime {
         throw new AgentErrors.StartFailed("agent " + container + " did not become ready: " + last);
     }
 
-    private void removeQuietly(String id) {
+    private static String statusOf(InspectContainerResponse inspected) {
+        if (inspected.getState() == null || inspected.getState().getStatus() == null) {
+            return "unknown";
+        }
+        return inspected.getState().getStatus();
+    }
+
+    private static boolean needsStop(String status) {
+        return "running".equalsIgnoreCase(status)
+                || "restarting".equalsIgnoreCase(status)
+                || "paused".equalsIgnoreCase(status);
+    }
+
+    private void stopQuietly(String id) {
         try {
             docker.stopContainerCmd(id).withTimeout(5).exec();
         } catch (RuntimeException ignored) {
-            // The container may already be stopped.
+            // Already stopped, or stop failed and force-remove follows.
         }
+    }
+
+    private void deleteContainer(String id, boolean required) {
         try {
             docker.removeContainerCmd(id).withForce(true).exec();
+        } catch (NotFoundException exception) {
+            // Already gone.
         } catch (RuntimeException exception) {
+            if (required) {
+                throw failure("remove", exception);
+            }
             log.warn("could not remove container {}: {}", id, exception.getMessage());
         }
+    }
+
+    private void removeQuietly(String id) {
+        stopQuietly(id);
+        deleteContainer(id, false);
     }
 
     private List<String> environment(String name, String role) {

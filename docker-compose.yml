@@ -28,4 +28,5 @@ services:
       AGENT_NANO_CPUS: ${AGENT_NANO_CPUS:-1000000000}
       TASK_TIMEOUT: ${TASK_TIMEOUT:-180s}
       MAX_HOPS: ${MAX_HOPS:-4}
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-15}
     restart: unless-stopped

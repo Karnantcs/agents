@@ -12,7 +12,7 @@ agentbox:
   ready-timeout: ${AGENT_READY_TIMEOUT:25s}
   task-timeout: ${TASK_TIMEOUT:180s}
   max-hops: ${MAX_HOPS:4}
-  max-steps: ${AGENT_MAX_STEPS:8}
+  max-steps: ${AGENT_MAX_STEPS:15}
   workspace: ${WORKSPACE:/workspace}
   agent-name: ${AGENT_NAME:agent}
   role: ${AGENT_ROLE:You are a helpful agent.}

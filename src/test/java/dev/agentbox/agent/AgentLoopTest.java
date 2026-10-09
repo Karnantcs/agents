@@ -47,6 +47,8 @@ class AgentLoopTest {
         assertThat(result.trace()).extracting(TaskResult.TraceStep::tool).containsExactly("write_file");
         assertThat(Files.readString(workspace.resolve("hello.txt"))).isEqualTo("hi");
         assertThat(llm.systems.get(0)).contains("file clerk");
+        assertThat(llm.systems.get(0)).contains("private workspace");
+        assertThat(llm.systems.get(0)).contains("rely on that agent's reply");
     }
 
     @Test

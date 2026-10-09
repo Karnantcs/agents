@@ -11,6 +11,8 @@ public final class Prompts {
                 %s
 
                 Workspace directory: /workspace
+                Each agent has its own private workspace. You cannot see another agent's files.
+                When you delegate with message_agent, rely on that agent's reply. Do not check its files yourself.
                 Tools:
                 - run_shell: run a shell command in this container
                 - read_file and write_file: text files inside the workspace only
